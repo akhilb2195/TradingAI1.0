@@ -1,0 +1,26 @@
+{
+    "NSE:SBIN-EQ": {
+        "Symbol": "NSE:SBIN-EQ",
+        "Exchange": "NSE",
+        "LTP": 1045.4,
+        "Previous Close": 1034.6,
+        "Open": 1040.0,
+        "High": 1055.4,
+        "Low": 1038.55,
+        "Change": 10.8,
+        "Change %": 1.0439,
+        "Timestamp": "2026-06-25 15:59:06"
+    },
+    "NSE:ADANIENT-EQ": {
+        "Symbol": "NSE:ADANIENT-EQ",
+        "Exchange": "NSE",
+        "LTP": 3038.0,
+        "Previous Close": 3069.7,
+        "Open": 3086.0,
+        "High": 3105.0,
+        "Low": 3027.7,
+        "Change": -31.7,
+        "Change %": -1.0327,
+        "Timestamp": "2026-06-25 15:59:26"
+    }
+}

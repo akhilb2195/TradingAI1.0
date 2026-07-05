@@ -1,0 +1,14 @@
+pip install fastapi
+pip install uvicorn
+pip install pandas
+pip install numpy
+pip install pandas-ta
+pip install sqlalchemy
+pip install psycopg2
+pip install websocket-client
+pip install requests
+pip install python-dotenv
+pip install streamlit
+fyers_apiv3
+pip install streamlit plotly --break-system-packages
+pip install redis
