@@ -117,6 +117,18 @@ _dumped_today = False
 _lock = threading.Lock()
 _reconnect_count = 0
 
+# --- Gap/session tracking -------------------------------------------------
+# GAP_LOG_KEY holds a running list of "we lost connection from X to Y"
+# events, shared across producer/consumer/candle_patterns via Redis, so
+# every downstream tool can see exactly when data is missing instead of
+# silently treating a gap as "price didn't move".
+GAP_LOG_KEY = "ticks:gap_log"
+
+_session_id = 0                 # increments every reconnect; tags every tick
+_awaiting_first_tick = False     # True right after a reconnect, until the next real tick arrives
+_gap_start_at = None            # wall-clock time the connection was lost
+# ---------------------------------------------------------------------------
+
 print(f"[PRODUCER] System clock at startup: {datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}")
 print("[PRODUCER] IMPORTANT: every timestamp this pipeline stores (received_at, "
       "candle bucketing downstream) depends on this clock being correct. "
@@ -129,10 +141,51 @@ def in_market_hours(now):
     return MARKET_OPEN <= t <= MARKET_CLOSE
 
 
+def log_gap(start_at, end_at, session_id):
+    """
+    Record a connection-outage window to Redis so every consumer of this
+    data (consumer.py, candle_patterns.py, your own trading logic) can see
+    it and treat that time range as "unknown", not "flat/unchanged".
+    """
+    record = {
+        "session_id": session_id,
+        "gap_start": start_at.strftime("%Y-%m-%d %H:%M:%S.%f"),
+        "gap_end": end_at.strftime("%Y-%m-%d %H:%M:%S.%f"),
+        "duration_sec": round((end_at - start_at).total_seconds(), 3),
+    }
+    try:
+        r.rpush(GAP_LOG_KEY, json.dumps(record))
+    except Exception as e:
+        print(f"[PRODUCER] Could not log gap to Redis: {e}")
+    print(f"[PRODUCER] GAP LOGGED: {record['gap_start']} -> {record['gap_end']} "
+          f"({record['duration_sec']}s missing, session #{session_id})")
+
+
 def store_tick(message):
+    global _awaiting_first_tick, _gap_start_at
+
     raw_symbol = message.get("symbol", "")
     if not raw_symbol:
         return
+
+    now = time.time()
+    exch_ts = message.get("exch_feed_time")
+    feed_delay_sec = None
+    if exch_ts:
+        try:
+            feed_delay_sec = round(now - int(exch_ts), 3)
+        except (ValueError, TypeError):
+            feed_delay_sec = None
+
+    resumed_after_gap = False
+    with _lock:
+        if _awaiting_first_tick:
+            resumed_after_gap = True
+            _awaiting_first_tick = False
+            if _gap_start_at is not None:
+                log_gap(_gap_start_at, datetime.now(), _session_id)
+                _gap_start_at = None
+        current_session = _session_id
 
     payload = {
         "symbol": raw_symbol,
@@ -148,9 +201,12 @@ def store_tick(message):
         "ask": message.get("ask_price"),
         "buy_qty": message.get("tot_buy_qty"),
         "sell_qty": message.get("tot_sell_qty"),
-        "exch_feed_time": message.get("exch_feed_time"),
+        "exch_feed_time": exch_ts,
         "last_traded_time": message.get("last_traded_time"),
-        "received_at": time.time(),
+        "received_at": now,
+        "feed_delay_sec": feed_delay_sec,   # how stale the exchange timestamp was when we got it
+        "session_id": current_session,       # increments on every reconnect - lets you see session boundaries
+        "resumed_after_gap": resumed_after_gap,  # True only for the very first tick after a reconnect
     }
 
     try:
@@ -317,22 +373,31 @@ def onerror(message):
 
 
 def onclose(message):
-    global _reconnect_count
+    global _reconnect_count, _gap_start_at, _awaiting_first_tick
     _reconnect_count += 1
+    with _lock:
+        _gap_start_at = datetime.now()
+        _awaiting_first_tick = True
     print(f"[PRODUCER] {datetime.now().strftime('%H:%M:%S')} Closed "
           f"(disconnect/reconnect #{_reconnect_count}):", message)
     print("[PRODUCER] NOTE: any ticks the exchange sent while disconnected "
           "were never received - this is a genuine feed gap, not something "
-          "this script can recover after the fact.")
+          "this script can recover after the fact. It will be logged with "
+          "exact start/end times the moment the connection resumes.")
 
 
 def start_producer(symbols):
+    global _session_id
     threading.Thread(target=scheduler_loop, daemon=True).start()
 
     def onopen():
+        global _session_id
+        with _lock:
+            _session_id += 1
         socket.subscribe(symbols=symbols, data_type="SymbolUpdate")
         socket.keep_running()
-        print(f"[PRODUCER] {datetime.now().strftime('%H:%M:%S')} Connected/subscribed.")
+        print(f"[PRODUCER] {datetime.now().strftime('%H:%M:%S')} Connected/subscribed "
+              f"(session #{_session_id}).")
 
     socket = data_ws.FyersDataSocket(
         access_token=access_token,

@@ -42,6 +42,7 @@ HEARTBEAT_SECONDS = 30      # how often to print an "I'm alive" status line
 CANDLE_MENU = [1, 3, 5, 15] # options offered in the interactive menu
 SANE_WINDOW_SECONDS = 20    # exchange feed time only trusted if within this many seconds of now
 RECONNECT_AFTER_FAILURES = 5  # recreate the Redis client after this many consecutive read errors
+GAP_LOG_KEY = "ticks:gap_log"  # must match producer.py
 
 
 # ----------------------------------------------------------------------
@@ -126,6 +127,18 @@ class CandleBuilder:
         self.last_day_high = None
         self.last_day_low = None
 
+    def mark_gap(self, gap_end_time):
+        """
+        Flag whichever candle is open at gap_end_time as gap-affected -
+        its open/high/low/close may be missing real price action from
+        the outage window, so it should never be silently trusted or
+        pattern-matched like a normal candle.
+        """
+        b = bucket_start(gap_end_time, self.interval_seconds)
+        c = self.candles.get(b)
+        if c is not None:
+            c["gap_affected"] = True
+
     def add_tick(self, ltp, volume, ts, exch_high=None, exch_low=None):
         if ltp is None:
             return
@@ -144,6 +157,7 @@ class CandleBuilder:
                 "first_vol": volume if volume is not None else 0,
                 "last_vol": volume if volume is not None else 0,
                 "synthetic": False,
+                "gap_affected": False,
             }
             self.candles[b] = c
             self.order.append(b)
@@ -193,6 +207,7 @@ class CandleBuilder:
                 "first_vol": 0,
                 "last_vol": 0,
                 "synthetic": True,
+                "gap_affected": False,
             }
             self.candles[b] = c
             self.order.append(b)
@@ -264,7 +279,7 @@ def close_enough(a, b, scale):
 def detect_patterns(history):
     if not history:
         return []
-    if history[-1].get("synthetic"):
+    if history[-1].get("synthetic") or history[-1].get("gap_affected"):
         return []
 
     patterns = []
@@ -383,9 +398,13 @@ def fmt_candle_line(symbol, c):
 def announce(symbol, c, patterns):
     print("=" * 72)
     tag = "  (no trades this candle)" if c.get("synthetic") else ""
+    if c.get("gap_affected"):
+        tag += "  *** DATA GAP DURING THIS CANDLE - OHLC may be incomplete ***"
     print(f"[{symbol}]  {fmt_candle_line(symbol, c)}{tag}")
     if c.get("synthetic"):
         print("   >>> Pattern: skipped (flat/no-trade candle)")
+    elif c.get("gap_affected"):
+        print("   >>> Pattern: skipped (data gap - OHLC not reliable)")
     elif patterns:
         print(f"   >>> PATTERN: {', '.join(patterns)}")
     else:
@@ -423,6 +442,8 @@ def backfill_symbol(symbol, builder, retries=3):
             ts = parse_tick_time(payload)
             builder.add_tick(payload.get("ltp"), payload.get("volume"), ts,
                               exch_high=payload.get("high"), exch_low=payload.get("low"))
+            if payload.get("resumed_after_gap"):
+                builder.mark_gap(ts)
         except Exception as e:
             print(f"[CANDLES] Bad historical tick for {symbol}: {e}")
         last_id = entry_id
@@ -493,6 +514,8 @@ def run(symbols, candle_minutes):
                         ts = parse_tick_time(payload)
                         builders[sym].add_tick(payload.get("ltp"), payload.get("volume"), ts,
                                                 exch_high=payload.get("high"), exch_low=payload.get("low"))
+                        if payload.get("resumed_after_gap"):
+                            builders[sym].mark_gap(ts)
                     except Exception as e:
                         print(f"[CANDLES] Bad tick for {sym}: {e}")
                     last_ids[stream_name] = entry_id
