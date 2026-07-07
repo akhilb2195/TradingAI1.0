@@ -61,3 +61,4 @@
 {"level":"DEBUG","location":"[get_call:163] fyersModel","message":{"Status Code":200,"API":"/history"},"timestamp":"2026-07-04 23:34:39,717+0530","service":"FyersAPIRequest"}
 {"level":"DEBUG","location":"[get_call:163] fyersModel","message":{"Status Code":401,"API":"/history"},"timestamp":"2026-07-05 07:38:47,848+0530","service":"FyersAPIRequest"}
 {"level":"DEBUG","location":"[get_call:163] fyersModel","message":{"Status Code":200,"API":"/history"},"timestamp":"2026-07-05 08:36:20,178+0530","service":"FyersAPIRequest"}
+{"level":"DEBUG","location":"[get_call:163] fyersModel","message":{"Status Code":200,"API":"/history"},"timestamp":"2026-07-06 09:27:43,259+0530","service":"FyersAPIRequest"}

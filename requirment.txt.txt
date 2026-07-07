@@ -12,3 +12,4 @@ pip install streamlit
 fyers_apiv3
 pip install streamlit plotly --break-system-packages
 pip install redis
+pip install pandas pyarrow
